@@ -1,0 +1,19 @@
+{
+  "interferences": [
+    {
+      "interference_id": "wifi-a",
+      "name": "Wi-Fi 频段 A（更新）",
+      "occupied_frequencies": [480, 490, 500]
+    },
+    {
+      "interference_id": "led-wall",
+      "name": "LED 控制干扰",
+      "occupied_frequencies": [520, 528]
+    },
+    {
+      "interference_id": "new-intercom",
+      "name": "新增对讲干扰",
+      "occupied_frequencies": [561, 570]
+    }
+  ]
+}

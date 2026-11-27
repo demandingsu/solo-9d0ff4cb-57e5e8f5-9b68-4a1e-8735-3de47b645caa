@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local dependencies / virtual environments
+.pydeps/
+.venv/
+venv/
+
+# SQLite
+*.db
+*.db-wal
+*.db-shm
+data/
+
+# OS/editor
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,35 @@
+{
+  "name": "晚会现场配频示例",
+  "mics": [
+    {
+      "mic_id": "m1",
+      "name": "主持",
+      "main_frequency": 480,
+      "backup_candidates": [490, 500, 510]
+    },
+    {
+      "mic_id": "m2",
+      "name": "独唱",
+      "main_frequency": 520,
+      "backup_candidates": [528, 536]
+    },
+    {
+      "mic_id": "m3",
+      "name": "嘉宾",
+      "main_frequency": 561,
+      "backup_candidates": [570, 580, 590, 600]
+    }
+  ],
+  "interferences": [
+    {
+      "interference_id": "wifi-a",
+      "name": "Wi-Fi 频段 A",
+      "occupied_frequencies": [480, 490]
+    },
+    {
+      "interference_id": "led-wall",
+      "name": "LED 控制干扰",
+      "occupied_frequencies": [520, 528]
+    }
+  ]
+}
