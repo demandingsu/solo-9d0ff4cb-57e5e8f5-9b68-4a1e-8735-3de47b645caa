@@ -1,0 +1,20 @@
+{
+  "effective_version": 1,
+  "target_mic_id": "m1",
+  "target_frequency": 480,
+  "events": [
+    {"time": 100, "status": "dropout"},
+    {"time": 200, "status": "normal"}
+  ],
+  "mics": [
+    {
+      "mic_id": "m2",
+      "name": "独唱",
+      "clock_offset_range": [0, 50],
+      "segments": [
+        {"start": 100, "end": 101, "frequency": 480},
+        {"start": 200, "end": 201, "frequency": 480}
+      ]
+    }
+  ]
+}

@@ -9,6 +9,14 @@ from __future__ import annotations
 from itertools import product
 from typing import Any, Iterable, Mapping, Sequence
 
+# Re-exported so callers can reach the review solver from either
+# ``app.review`` or the established rules module ``app.solver``.
+from .review import (  # noqa: F401
+    analyze_dropouts,
+    review_incident,
+    solve_review,
+)
+
 Mic = Mapping[str, Any]
 Interference = Mapping[str, Any]
 

@@ -5,13 +5,14 @@ from __future__ import annotations
 import os
 from typing import Any, Union
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Query, Request
 from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from . import storage
+from .review import ReviewInputError, review_incident
 from .schemas import (
     ConfigurationIn,
     InterferenceIn,
@@ -19,6 +20,10 @@ from .schemas import (
     PathRegistrationIn,
     RegistrationIn,
     RegistrationItem,
+    REVIEW_EXAMPLE_EXPLAINABLE,
+    REVIEW_EXAMPLE_FULL_SESSION,
+    REVIEW_EXAMPLE_NO_SOLUTION,
+    ReviewRequest,
 )
 
 InterferencePayload = Union[InterferenceUpdate, list[InterferenceIn]]
@@ -122,6 +127,7 @@ def create_app(database_path: str | None = None) -> FastAPI:
             "docs": "/docs",
             "health": "/health",
             "table": "/api/table",
+            "review": "/api/review",
             "examples": DEFAULT_EXAMPLE,
         }
 
@@ -432,6 +438,302 @@ def create_app(database_path: str | None = None) -> FastAPI:
         return {
             "versions": storage.list_versions(db(request), limit=safe_limit)
         }
+
+    # ------------------------------------------------------------------
+    # Rehearsal dropout review ("复盘")
+    # ------------------------------------------------------------------
+
+    def _run_review(
+        request: Request,
+        payload: ReviewRequest,
+        version_override: int | None = None,
+        target_override: str | None = None,
+        version_query: int | None = None,
+    ) -> dict[str, Any]:
+        data = payload.model_dump()
+
+        version_ref = version_override
+        if version_ref is None:
+            version_ref = version_query
+        if version_ref is None:
+            version_ref = data.get("effective_version")
+
+        target_id = target_override or data.get("target_mic_id")
+        if target_id is not None:
+            target_id = str(target_id).strip() or None
+        data["target_mic_id"] = target_id
+
+        database = db(request)
+        version_explicit = version_ref is not None
+        if version_explicit:
+            snapshot = storage.get_version(database, int(version_ref))
+            if snapshot is None:
+                available = [
+                    item["effective_version"]
+                    for item in storage.list_versions(database, limit=100)
+                ]
+                raise storage.ApiError(
+                    404,
+                    "version_not_found",
+                    f"找不到配频版本 v{version_ref}。",
+                    {
+                        "effective_version": int(version_ref),
+                        "available_versions": available,
+                    },
+                )
+            effective_version: int | None = snapshot["effective_version"]
+            configuration = snapshot["configuration"]
+            version_source = "explicit"
+        else:
+            current = storage.get_current_table(database)
+            if current is not None:
+                effective_version = current["effective_version"]
+                configuration = current["configuration"]
+                version_source = "current_default"
+            else:
+                effective_version = None
+                configuration = None
+                version_source = "none"
+
+        version_mics: dict[str, dict[str, Any]] = {}
+        if configuration is not None:
+            version_mics = {
+                str(mic["mic_id"]): mic
+                for mic in configuration.get("mics", [])
+            }
+
+        if target_id is not None and version_explicit and version_mics and target_id not in version_mics:
+            raise storage.ApiError(
+                404,
+                "target_mic_not_found",
+                f"配频版本 v{effective_version} 中找不到目标麦：{target_id}",
+                {
+                    "target_mic_id": target_id,
+                    "effective_version": effective_version,
+                    "available_mic_ids": list(version_mics),
+                },
+            )
+
+        if data.get("target_frequency") is None:
+            version_mic = version_mics.get(target_id) if target_id else None
+            if version_mic is not None and version_mic.get("main_frequency") is not None:
+                data["target_frequency"] = int(version_mic["main_frequency"])
+            else:
+                raise storage.ApiError(
+                    422,
+                    "missing_target_frequency",
+                    "必须给出目标麦全程使用的固定频点 target_frequency"
+                    "（或提供可解析该麦主频的 effective_version + target_mic_id）。",
+                )
+
+        # Enrich measured mics with plan names where IDs line up.
+        for mic in data.get("mics", []):
+            plan_mic = version_mics.get(str(mic.get("mic_id")))
+            if plan_mic is not None and not mic.get("name"):
+                mic["name"] = plan_mic.get("name")
+
+        try:
+            result = review_incident(data)
+        except ReviewInputError as exc:
+            raise storage.ApiError(
+                422, "invalid_review_input", exc.message, exc.details
+            ) from exc
+
+        target_plan_mic = version_mics.get(target_id) or {}
+        result["effective_version"] = effective_version
+        result["version_source"] = version_source
+        result["target_mic"] = {
+            "mic_id": target_id,
+            "name": target_plan_mic.get("name"),
+            "fixed_frequency": result["target_frequency"],
+            "plan_main_frequency": target_plan_mic.get("main_frequency"),
+        }
+        if version_mics:
+            result["version_mic_ids"] = list(version_mics)
+        return result
+
+    _REVIEW_BODY_EXAMPLES = {
+        "single_event_explainable": {
+            "summary": "单次掉音·可解释（重频 + 互调候选）",
+            "description": (
+                "版本 1 的 m1 固定在 480；t=1000 的掉音在 m2 偏移 0 时由重频"
+                "造成，在 m2 偏移 10..20ms 时由 m3(500,a) 与 m2(520,b) 的"
+                " 2a-b=480 互调造成。"
+            ),
+            "value": REVIEW_EXAMPLE_EXPLAINABLE,
+        },
+        "whole_session_no_solution": {
+            "summary": "整场无解（掉音与正常约束冲突）",
+            "description": (
+                "m2 的偏移范围 [0,50]ms 内，只有偏移 0 能让 t=100 的掉音发生"
+                "重频，但同一偏移也会让 t=200 的正常记录命中重频，因此无解。"
+            ),
+            "value": REVIEW_EXAMPLE_NO_SOLUTION,
+        },
+        "full_session_explainable": {
+            "summary": "四个时刻·两支麦偏移范围·整场可解释",
+            "value": REVIEW_EXAMPLE_FULL_SESSION,
+        },
+    }
+
+    @app.post(
+        "/api/review",
+        tags=["复盘"],
+        summary="掉音复盘：求时钟偏移并逐次列出所有可行成因",
+        operation_id="post_review_dropouts",
+    )
+    @app.put(
+        "/api/review",
+        tags=["复盘"],
+        summary="掉音复盘：求时钟偏移并逐次列出所有可行成因",
+        operation_id="put_review_dropouts",
+        include_in_schema=False,
+    )
+    def review_dropouts(
+        request: Request,
+        payload: ReviewRequest,
+        version: int | None = Query(
+            default=None, description="可选：URL 指定配频版本，优先于请求体。"
+        ),
+        target_mic_id: str | None = Query(
+            default=None, description="可选：URL 查询参数指定目标麦。"
+        ),
+    ) -> dict[str, Any]:
+        return _run_review(
+            request,
+            payload,
+            version_query=version,
+            target_override=target_mic_id,
+        )
+
+    # Common alternative path names, kept out of the Swagger list.
+    for _alias in (
+        "/api/reviews",
+        "/api/review_dropouts",
+        "/api/review-dropout",
+        "/api/review_dropout",
+        "/api/review-dropouts",
+        "/api/dropout",
+        "/api/dropouts",
+        "/api/dropout_review",
+        "/api/dropout-review",
+        "/api/dropout_reviews",
+        "/api/dropout-reviews",
+        "/api/dropout_analysis",
+        "/api/dropout-analysis",
+        "/api/dropouts/review",
+        "/api/dropout/review",
+        "/api/incident-review",
+        "/api/incidents/review",
+        "/api/rehearsal-review",
+        "/api/rehearsal/review",
+        "/api/forensics",
+        "/api/postmortem",
+        "/api/retrospective",
+        "/api/analyze",
+        "/api/analysis",
+        "/api/frequency-review",
+        "/api/intermodulation-review",
+        "/api/analysis/review",
+        "/api/dropouts/analyze",
+        "/review",
+        "/review/dropouts",
+    ):
+        app.add_api_route(
+            _alias,
+            review_dropouts,
+            methods=["POST", "PUT"],
+            include_in_schema=False,
+        )
+
+    @app.post(
+        "/api/versions/{version}/review",
+        tags=["复盘"],
+        summary="按配频版本复盘指定目标麦的掉音记录",
+        operation_id="post_version_review",
+    )
+    def review_version_scoped(
+        request: Request,
+        version: int,
+        payload: ReviewRequest,
+        target_mic_id: str | None = Query(default=None),
+    ) -> dict[str, Any]:
+        return _run_review(
+            request,
+            payload,
+            version_override=version,
+            target_override=target_mic_id,
+        )
+
+    @app.post(
+        "/api/mics/{target_mic_id}/review",
+        tags=["复盘"],
+        summary="按目标麦 mic_id 提交掉音复盘",
+        operation_id="post_mic_review",
+    )
+    def review_mic_scoped(
+        request: Request,
+        target_mic_id: str,
+        payload: ReviewRequest,
+        version: int | None = Query(default=None),
+    ) -> dict[str, Any]:
+        return _run_review(
+            request,
+            payload,
+            version_query=version,
+            target_override=target_mic_id,
+        )
+
+    @app.post(
+        "/api/versions/{version}/mics/{target_mic_id}/review",
+        tags=["复盘"],
+        summary="版本 + 目标麦完全指定的掉音复盘",
+        operation_id="post_version_mic_review",
+    )
+    def review_version_and_mic_scoped(
+        request: Request,
+        version: int,
+        target_mic_id: str,
+        payload: ReviewRequest,
+    ) -> dict[str, Any]:
+        return _run_review(
+            request,
+            payload,
+            version_override=version,
+            target_override=target_mic_id,
+        )
+
+    # Attach the two requested trial records as proper OpenAPI Media Type
+    # examples (version-independent; Body(examples=...) moved into the JSON
+    # schema in newer FastAPI releases and did not feed Swagger's dropdown).
+    from fastapi.openapi.utils import get_openapi
+
+    def _custom_openapi() -> dict[str, Any]:
+        if app.openapi_schema is not None:
+            return app.openapi_schema
+        schema = get_openapi(
+            title=app.title,
+            version=app.version,
+            description=app.description,
+            routes=app.routes,
+        )
+        for path, method in (
+            ("/api/review", "post"),
+            ("/api/versions/{version}/review", "post"),
+        ):
+            operation = schema.get("paths", {}).get(path, {}).get(method)
+            if not operation:
+                continue
+            media = (
+                operation.setdefault("requestBody", {})
+                .setdefault("content", {})
+                .setdefault("application/json", {})
+            )
+            media["examples"] = _REVIEW_BODY_EXAMPLES
+        app.openapi_schema = schema
+        return schema
+
+    app.openapi = _custom_openapi  # type: ignore[method-assign]
 
     return app
 

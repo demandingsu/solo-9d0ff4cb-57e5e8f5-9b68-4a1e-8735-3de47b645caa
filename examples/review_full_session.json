@@ -1,0 +1,28 @@
+{
+  "effective_version": 1,
+  "target_mic_id": "m1",
+  "target_frequency": 600,
+  "events": [
+    {"time": 0, "status": "normal"},
+    {"time": 1000, "status": "dropout"},
+    {"time": 2000, "status": "normal"},
+    {"time": 3000, "status": "dropout"}
+  ],
+  "mics": [
+    {
+      "mic_id": "m2",
+      "clock_offset_range": [-20, 20],
+      "segments": [
+        {"start": 990, "end": 1031, "frequency": 600},
+        {"start": 2980, "end": 3021, "frequency": 640}
+      ]
+    },
+    {
+      "mic_id": "m3",
+      "clock_offset_range": [-20, 20],
+      "segments": [
+        {"start": 2980, "end": 3021, "frequency": 680}
+      ]
+    }
+  ]
+}

@@ -463,6 +463,30 @@ def get_current_table(db_path: str) -> Optional[dict[str, Any]]:
         conn.close()
 
 
+def get_version(db_path: str, version: int) -> Optional[dict[str, Any]]:
+    """Return one published version snapshot, or ``None`` if it is missing."""
+
+    conn = connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT * FROM versions WHERE version=?", (int(version),)
+        ).fetchone()
+        if row is None:
+            return None
+        configuration = json.loads(row["config_json"])
+        result = json.loads(row["result_json"])
+        return {
+            "effective_version": row["version"],
+            "effective_at": row["created_at"],
+            "trigger": row["trigger_name"],
+            "setup_name": row["setup_name"],
+            "configuration": configuration,
+            "result": result,
+        }
+    finally:
+        conn.close()
+
+
 def list_versions(db_path: str, limit: int = 20) -> list[dict[str, Any]]:
     conn = connect(db_path)
     try:

@@ -1,0 +1,26 @@
+{
+  "effective_version": 1,
+  "target_mic_id": "m1",
+  "target_frequency": 480,
+  "events": [
+    {"time": 1000, "status": "dropout", "label": "单次掉音"}
+  ],
+  "mics": [
+    {
+      "mic_id": "m2",
+      "name": "独唱",
+      "clock_offset_range": [0, 50],
+      "segments": [
+        {"start": 1000, "end": 1001, "frequency": 480},
+        {"start": 1010, "end": 1021, "frequency": 520}
+      ]
+    },
+    {
+      "mic_id": "m3",
+      "name": "嘉宾",
+      "segments": [
+        {"start": 1000, "end": 1001, "frequency": 500}
+      ]
+    }
+  ]
+}
